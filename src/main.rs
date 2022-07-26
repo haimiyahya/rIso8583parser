@@ -46,6 +46,26 @@ mod iso8583_parser {
     use std::str;
     use std::{fmt::Write, num::ParseIntError};
 
+    #[derive(PartialEq, Debug)]
+    pub enum FieldType {
+        A,
+        N,
+        S,
+        AN,
+        AS,
+        NS,
+        ANS,
+        B,
+        Z,
+        UNKNOWN,
+    }
+
+    #[derive(PartialEq)]
+    pub enum FieldTypeCategory {
+        StringData,
+        BytesData,
+    }
+
     #[derive(Debug)]
     pub struct DataElement {
         position: usize,
@@ -70,6 +90,17 @@ mod iso8583_parser {
         }
     }
 
+    #[derive(Debug)]
+    pub enum DataElementValue {
+        StringVal(String),
+        ByteVal(Vec<u8>),
+    }
+
+    #[derive(Debug)]
+    pub struct Txn {
+        pub mti: String,
+        pub fields: BTreeMap<usize, DataElementValue>,
+    }
     pub struct Parser {
         elements_spec: BTreeMap<usize, DataElement>,
     }
@@ -139,19 +170,19 @@ mod iso8583_parser {
             let mut iso_data = data;
             let field_format = &self.elements_spec;
 
-            let mut field_vals: BTreeMap<usize, String> = BTreeMap::new();
+            let mut field_vals: BTreeMap<usize, DataElementValue> = BTreeMap::new();
 
             for (i, c) in bitmap_binstr.chars().enumerate() {
                 if c == '1' {
-                    let fieldPos = i + 1;
-                    let field_element = &field_format[&fieldPos];
+                    let field_pos = i + 1;
+                    let field_element = &field_format[&field_pos];
 
                     let (header_len, max_len) = match field_element {
                         DataElement {
                             position: _,
                             data_type: _,
-                            header_size: header_size,
-                            max_len: max_len,
+                            header_size,
+                            max_len,
                         } => (header_size, max_len),
                     };
 
@@ -169,26 +200,6 @@ mod iso8583_parser {
                 fields: field_vals,
             }
         }
-    }
-
-    #[derive(PartialEq, Debug)]
-    pub enum FieldType {
-        A,
-        N,
-        S,
-        AN,
-        AS,
-        NS,
-        ANS,
-        B,
-        Z,
-        UNKNOWN,
-    }
-
-    #[derive(Debug)]
-    pub struct Txn {
-        pub mti: String,
-        pub fields: BTreeMap<usize, String>,
     }
 
     pub fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
@@ -227,7 +238,7 @@ mod iso8583_parser {
         header_len: usize,
         max_length: usize,
         field_type: FieldType,
-    ) -> (String, &'a [u8]) {
+    ) -> (DataElementValue, &'a [u8]) {
         let total_char_per_byte = match field_type {
             FieldType::A
             | FieldType::S
@@ -235,7 +246,19 @@ mod iso8583_parser {
             | FieldType::AS
             | FieldType::NS
             | FieldType::ANS => 1,
+            FieldType::B => 2,
             _ => 2,
+        };
+
+        let data_category = match field_type {
+            FieldType::A
+            | FieldType::S
+            | FieldType::AN
+            | FieldType::AS
+            | FieldType::NS
+            | FieldType::ANS => FieldTypeCategory::StringData,
+            FieldType::B => FieldTypeCategory::BytesData,
+            _ => FieldTypeCategory::StringData,
         };
 
         let (head_len, data_len) = if header_len > 0 {
@@ -275,13 +298,24 @@ mod iso8583_parser {
         };
 
         //let field_val = encode_hex(&bytes[pos..end_pos]);
-        let field_val = if max_length > 0 && field_val.len() > max_length {
+        let field_val = if max_length > 0
+            && field_val.len() > max_length
+            && data_category == FieldTypeCategory::StringData
+        {
             String::from(&field_val[0..max_length])
         } else {
             String::from(&field_val)
         };
 
-        (field_val, &bytes[end_pos..])
+        let field_v = {
+            if data_category == FieldTypeCategory::StringData {
+                DataElementValue::StringVal(field_val)
+            } else {
+                DataElementValue::ByteVal(decode_hex(&field_val).unwrap())
+            }
+        };
+
+        (field_v, &bytes[end_pos..])
     }
 
     #[cfg(test)]
@@ -297,7 +331,12 @@ mod iso8583_parser {
             let (result_field_val, _) =
                 super::parse_field(&field_val_byte, 0, max_length, super::FieldType::N);
 
-            assert_eq!(result_field_val, val);
+            match result_field_val {
+                super::DataElementValue::StringVal(field_val) => {
+                    assert_eq!(field_val, val)
+                }
+                _ => (),
+            }
         }
         #[test]
         fn fixed_length_ascii() {
@@ -309,7 +348,12 @@ mod iso8583_parser {
             let (result_field_val, _) =
                 super::parse_field(&field_val_byte, 0, max_length, super::FieldType::AN);
 
-            assert_eq!(result_field_val, val);
+            match result_field_val {
+                super::DataElementValue::StringVal(field_val) => {
+                    assert_eq!(field_val, val)
+                }
+                _ => (),
+            }
         }
     }
 
