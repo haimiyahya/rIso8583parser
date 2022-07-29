@@ -321,23 +321,62 @@ mod iso8583_parser {
     #[cfg(test)]
     mod tests {
 
+        enum FieldLengthType {
+            VariableLen(usize),
+            FixedLen,
+        }
+
         #[test]
-        fn fixed_length_numeric() {
-            let val = "123456789012".to_string(); // 12 digits
-            let max_length = val.len();
+        fn test_numeric_fixed_length() {
+            let field_val = String::from("123456789012");
+            tester_for_numerics(&field_val, FieldLengthType::FixedLen, 10);
+        }
 
-            let field_val_byte = super::decode_hex(&val).unwrap();
+        #[test]
+        fn test_numeric_variable_length() {
+            let field_val = String::from("123456789012");
+            let mut field_val_out = field_val.len().to_string();
+            field_val_out = field_val_out + &field_val;
 
-            let (result_field_val, _) =
-                super::parse_field(&field_val_byte, 0, max_length, super::FieldType::N);
+            tester_for_numerics(&field_val_out, FieldLengthType::VariableLen(2), 9);
+        }
+
+        fn tester_for_numerics(
+            iso_fragment: &str,
+            field_length_type: FieldLengthType,
+            max_length: usize,
+        ) {
+            let max_length = max_length;
+            let header_length = match field_length_type {
+                FieldLengthType::FixedLen => 0,
+                FieldLengthType::VariableLen(header_size) => header_size,
+            };
+            let original: String = match field_length_type {
+                FieldLengthType::FixedLen => iso_fragment.chars().take(max_length).collect(),
+                FieldLengthType::VariableLen(header_size) => iso_fragment
+                    .chars()
+                    .skip(header_size)
+                    .take(max_length)
+                    .collect(),
+            };
+
+            let iso_fragment_bytes = super::decode_hex(&iso_fragment).unwrap();
+
+            let (result_field_val, _) = super::parse_field(
+                &iso_fragment_bytes,
+                header_length,
+                max_length,
+                super::FieldType::N,
+            );
 
             match result_field_val {
-                super::DataElementValue::StringVal(field_val) => {
-                    assert_eq!(field_val, val)
+                super::DataElementValue::StringVal(parsed) => {
+                    assert_eq!(original, parsed);
                 }
                 _ => (),
             }
         }
+
         #[test]
         fn fixed_length_ascii() {
             let val = "abcdefghijklmn".to_string(); // 14 char
