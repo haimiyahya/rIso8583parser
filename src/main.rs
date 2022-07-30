@@ -46,7 +46,7 @@ mod iso8583_parser {
     use std::str;
     use std::{fmt::Write, num::ParseIntError};
 
-    #[derive(PartialEq, Debug)]
+    #[derive(PartialEq, Debug, Clone, Copy)]
     pub enum FieldType {
         A,
         N,
@@ -61,7 +61,7 @@ mod iso8583_parser {
     }
 
     #[derive(PartialEq)]
-    pub enum FieldTypeCategory {
+    pub enum FieldDataClass {
         StringData,
         BytesData,
     }
@@ -84,16 +84,13 @@ mod iso8583_parser {
         fn new(
             position: usize,
             data_type: FieldType,
-            header_size: usize,
+            header_type: HeaderType,
             max_len: usize,
         ) -> DataElement {
             DataElement {
                 position: position,
                 data_type: data_type,
-                header_type: match header_size {
-                    0 => HeaderType::Fixed,
-                    size => HeaderType::Var(size),
-                },
+                header_type: header_type,
                 max_len: max_len,
             }
         }
@@ -139,7 +136,7 @@ mod iso8583_parser {
                     FieldType::UNKNOWN
                 };
 
-                let (header_len, max_len) = if let Some(part) = tokens.next() {
+                let (header_type, max_len) = if let Some(part) = tokens.next() {
                     let mut header_len: usize = 0;
                     for c in part.chars() {
                         if c == '.' {
@@ -155,16 +152,15 @@ mod iso8583_parser {
                         Ok(length) => length,
                         Err(..) => 0,
                     };
-                    (header_len, max_len)
+                    (HeaderType::Var(header_len), max_len)
                 } else {
-                    let header_len: usize = 0;
                     let max_len: usize = 0;
-                    (header_len, max_len)
+                    (HeaderType::Fixed, max_len)
                 };
 
                 elements_spec.insert(
                     *pos,
-                    DataElement::new(*pos, field_type, header_len, max_len),
+                    DataElement::new(*pos, field_type, header_type, max_len),
                 );
             }
 
@@ -186,18 +182,17 @@ mod iso8583_parser {
                     let field_pos = i + 1;
                     let field_element = &field_format[&field_pos];
 
-                    let (header_type, max_len) = match field_element {
+                    let (header_type, field_type, max_len) = match field_element {
                         DataElement {
                             position: _,
-                            data_type: _,
+                            data_type: field_type,
                             header_type,
                             max_len,
-                        } => (header_type, max_len),
+                        } => (header_type, field_type, max_len),
                     };
-
-                    let field_type = FieldType::N;
+                    
                     let (field_val, next_data) =
-                        parse_field(&iso_data, *header_type, *max_len, field_type);
+                        parse_field(&iso_data, *header_type, *max_len, *field_type);
                     field_vals.insert(i + 1, field_val);
 
                     iso_data = next_data;
@@ -259,15 +254,15 @@ mod iso8583_parser {
             _ => 2,
         };
 
-        let data_category = match field_type {
+        let data_class = match field_type {
             FieldType::A
             | FieldType::S
             | FieldType::AN
             | FieldType::AS
             | FieldType::NS
-            | FieldType::ANS => FieldTypeCategory::StringData,
-            FieldType::B => FieldTypeCategory::BytesData,
-            _ => FieldTypeCategory::StringData,
+            | FieldType::ANS => FieldDataClass::StringData,
+            FieldType::B => FieldDataClass::BytesData,
+            _ => FieldDataClass::StringData,
         };
 
         let (head_len, data_len) = match header_type {
@@ -311,7 +306,7 @@ mod iso8583_parser {
         //let field_val = encode_hex(&bytes[pos..end_pos]);
         let field_val = if max_length > 0
             && field_val.len() > max_length
-            && data_category == FieldTypeCategory::StringData
+            && data_class == FieldDataClass::StringData
         {
             String::from(&field_val[0..max_length])
         } else {
@@ -319,7 +314,7 @@ mod iso8583_parser {
         };
 
         let field_v = {
-            if data_category == FieldTypeCategory::StringData {
+            if data_class == FieldDataClass::StringData {
                 DataElementValue::StringVal(field_val)
             } else {
                 DataElementValue::ByteVal(decode_hex(&field_val).unwrap())
@@ -331,11 +326,6 @@ mod iso8583_parser {
 
     #[cfg(test)]
     mod tests {
-
-        enum FieldLengthType {
-            VariableLen(usize),
-            FixedLen,
-        }
 
         #[test]
         fn test_numeric_fixed_length() {
