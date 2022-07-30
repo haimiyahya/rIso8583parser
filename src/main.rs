@@ -62,8 +62,8 @@ mod iso8583_parser {
 
     #[derive(PartialEq)]
     pub enum FieldDataClass {
-        StringData,
-        BytesData,
+        StringFieldType,
+        BytesFieldType,
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -190,7 +190,7 @@ mod iso8583_parser {
                             max_len,
                         } => (header_type, field_type, max_len),
                     };
-                    
+
                     let (field_val, next_data) =
                         parse_field(&iso_data, *header_type, *max_len, *field_type);
                     field_vals.insert(i + 1, field_val);
@@ -255,14 +255,8 @@ mod iso8583_parser {
         };
 
         let data_class = match field_type {
-            FieldType::A
-            | FieldType::S
-            | FieldType::AN
-            | FieldType::AS
-            | FieldType::NS
-            | FieldType::ANS => FieldDataClass::StringData,
-            FieldType::B => FieldDataClass::BytesData,
-            _ => FieldDataClass::StringData,
+            FieldType::B => FieldDataClass::BytesFieldType,
+            _ => FieldDataClass::StringFieldType,
         };
 
         let (head_len, data_len) = match header_type {
@@ -306,7 +300,7 @@ mod iso8583_parser {
         //let field_val = encode_hex(&bytes[pos..end_pos]);
         let field_val = if max_length > 0
             && field_val.len() > max_length
-            && data_class == FieldDataClass::StringData
+            && data_class == FieldDataClass::StringFieldType
         {
             String::from(&field_val[0..max_length])
         } else {
@@ -314,7 +308,7 @@ mod iso8583_parser {
         };
 
         let field_v = {
-            if data_class == FieldDataClass::StringData {
+            if data_class == FieldDataClass::StringFieldType {
                 DataElementValue::StringVal(field_val)
             } else {
                 DataElementValue::ByteVal(decode_hex(&field_val).unwrap())
