@@ -66,11 +66,17 @@ mod iso8583_parser {
         BytesData,
     }
 
+    #[derive(Debug, Clone, Copy)]
+    pub enum HeaderType {
+        Var(usize),
+        Fixed,
+    }
+
     #[derive(Debug)]
     pub struct DataElement {
         position: usize,
         data_type: FieldType,
-        header_size: usize,
+        header_type: HeaderType,
         max_len: usize,
     }
 
@@ -84,7 +90,10 @@ mod iso8583_parser {
             DataElement {
                 position: position,
                 data_type: data_type,
-                header_size: header_size,
+                header_type: match header_size {
+                    0 => HeaderType::Fixed,
+                    size => HeaderType::Var(size),
+                },
                 max_len: max_len,
             }
         }
@@ -177,18 +186,18 @@ mod iso8583_parser {
                     let field_pos = i + 1;
                     let field_element = &field_format[&field_pos];
 
-                    let (header_len, max_len) = match field_element {
+                    let (header_type, max_len) = match field_element {
                         DataElement {
                             position: _,
                             data_type: _,
-                            header_size,
+                            header_type,
                             max_len,
-                        } => (header_size, max_len),
+                        } => (header_type, max_len),
                     };
 
                     let field_type = FieldType::N;
                     let (field_val, next_data) =
-                        parse_field(&iso_data, *header_len, *max_len, field_type);
+                        parse_field(&iso_data, *header_type, *max_len, field_type);
                     field_vals.insert(i + 1, field_val);
 
                     iso_data = next_data;
@@ -235,7 +244,7 @@ mod iso8583_parser {
 
     pub fn parse_field<'a>(
         bytes: &'a [u8],
-        header_len: usize,
+        header_type: HeaderType,
         max_length: usize,
         field_type: FieldType,
     ) -> (DataElementValue, &'a [u8]) {
@@ -261,28 +270,30 @@ mod iso8583_parser {
             _ => FieldTypeCategory::StringData,
         };
 
-        let (head_len, data_len) = if header_len > 0 {
-            let head_len = make_even(header_len) / 2;
-            let head_val = encode_hex(&bytes[0..head_len]);
-            let head_val = head_val.parse::<usize>().unwrap();
+        let (head_len, data_len) = match header_type {
+            HeaderType::Var(head_len) => {
+                let head_len = make_even(head_len) / 2;
+                let head_val = encode_hex(&bytes[0..head_len]);
+                let head_val = head_val.parse::<usize>().unwrap();
 
-            let total_data_bytes = if total_char_per_byte == 2 {
-                make_even(head_val)
-            } else {
-                head_val
-            };
+                let total_data_bytes = if total_char_per_byte == 2 {
+                    make_even(head_val)
+                } else {
+                    head_val
+                };
+                let data_len: usize = total_data_bytes / total_char_per_byte;
+                (head_len, data_len)
+            }
+            HeaderType::Fixed => {
+                let total_data_bytes = if total_char_per_byte == 2 {
+                    make_even(max_length)
+                } else {
+                    max_length
+                };
 
-            let data_len: usize = total_data_bytes / total_char_per_byte;
-            (head_len, data_len)
-        } else {
-            let total_data_bytes = if total_char_per_byte == 2 {
-                make_even(max_length)
-            } else {
-                max_length
-            };
-
-            let data_len: usize = total_data_bytes / total_char_per_byte;
-            (0, data_len)
+                let data_len: usize = total_data_bytes / total_char_per_byte;
+                (0, data_len)
+            }
         };
 
         let pos: usize = head_len;
@@ -329,31 +340,28 @@ mod iso8583_parser {
         #[test]
         fn test_numeric_fixed_length() {
             let field_val = String::from("123456789012");
-            tester_for_numerics(&field_val, FieldLengthType::FixedLen, 10);
+            tester_for_numerics(&field_val, super::HeaderType::Fixed, 10);
         }
 
         #[test]
         fn test_numeric_variable_length() {
             let field_val = String::from("123456789012");
-            let mut field_val_out = field_val.len().to_string();
-            field_val_out = field_val_out + &field_val;
+            let mut field_val_with_header = field_val.len().to_string();
+            field_val_with_header = field_val_with_header + &field_val;
 
-            tester_for_numerics(&field_val_out, FieldLengthType::VariableLen(2), 9);
+            tester_for_numerics(&field_val_with_header, super::HeaderType::Var(2), 9);
         }
 
         fn tester_for_numerics(
             iso_fragment: &str,
-            field_length_type: FieldLengthType,
+            header_type: super::HeaderType,
             max_length: usize,
         ) {
             let max_length = max_length;
-            let header_length = match field_length_type {
-                FieldLengthType::FixedLen => 0,
-                FieldLengthType::VariableLen(header_size) => header_size,
-            };
-            let original: String = match field_length_type {
-                FieldLengthType::FixedLen => iso_fragment.chars().take(max_length).collect(),
-                FieldLengthType::VariableLen(header_size) => iso_fragment
+
+            let original: String = match header_type {
+                super::HeaderType::Fixed => iso_fragment.chars().take(max_length).collect(),
+                super::HeaderType::Var(header_size) => iso_fragment
                     .chars()
                     .skip(header_size)
                     .take(max_length)
@@ -364,7 +372,7 @@ mod iso8583_parser {
 
             let (result_field_val, _) = super::parse_field(
                 &iso_fragment_bytes,
-                header_length,
+                header_type,
                 max_length,
                 super::FieldType::N,
             );
@@ -384,8 +392,12 @@ mod iso8583_parser {
 
             let field_val_byte = val.as_bytes();
 
-            let (result_field_val, _) =
-                super::parse_field(&field_val_byte, 0, max_length, super::FieldType::AN);
+            let (result_field_val, _) = super::parse_field(
+                &field_val_byte,
+                super::HeaderType::Fixed,
+                max_length,
+                super::FieldType::AN,
+            );
 
             match result_field_val {
                 super::DataElementValue::StringVal(field_val) => {
