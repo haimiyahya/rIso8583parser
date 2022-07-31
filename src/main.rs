@@ -363,18 +363,68 @@ mod iso8583_parser {
     mod tests {
 
         #[test]
-        fn test_numeric_fixed_length() {
+        fn test_numeric_fixed_length_input_exact() {
+            let field_val = String::from("1234567890");
+            tester_for_numerics(&field_val, super::HeaderType::Fixed, 10);
+        }
+        #[test]
+        fn test_numeric_fixed_length_input_longer_2_digits() {
             let field_val = String::from("123456789012");
             tester_for_numerics(&field_val, super::HeaderType::Fixed, 10);
         }
+        #[test]
+        fn test_numeric_fixed_length_input_longer_20_digits() {
+            let field_val = String::from("123456789012345678901234567890");
+            tester_for_numerics(&field_val, super::HeaderType::Fixed, 10);
+        }
+        #[test]
+        fn test_numeric_fixed_length_input_longer_50_digits() {
+            let field_val =
+                String::from("123456789012345678901234567890123456789012345678901234567890");
+            tester_for_numerics(&field_val, super::HeaderType::Fixed, 10);
+        }
+        #[test]
+        fn test_numeric_fixed_length_input_longer_100_digits() {
+            let field_val = String::from("12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890");
+            tester_for_numerics(&field_val, super::HeaderType::Fixed, 10);
+        }
+        #[test]
+        fn test_numeric_fixed_length_input_odds_digits() {
+            let field_val = String::from("12345678901");
+            tester_for_numerics(&field_val, super::HeaderType::Fixed, 11);
+        }
 
         #[test]
-        fn test_numeric_variable_length() {
-            let field_val = String::from("123456789012");
+        fn test_numeric_variable_length_exact() {
+            let field_val = String::from("1234567890");
             let mut field_val_with_header = field_val.len().to_string();
             field_val_with_header = field_val_with_header + &field_val;
 
-            tester_for_numerics(&field_val_with_header, super::HeaderType::Var(2), 9);
+            tester_for_numerics(&field_val_with_header, super::HeaderType::Var(2), 10);
+        }
+        #[test]
+        fn test_numeric_variable_length_longer_10_digits() {
+            let field_val = String::from("12345678901234567890");
+            let mut field_val_with_header = field_val.len().to_string();
+            field_val_with_header = field_val_with_header + &field_val;
+
+            tester_for_numerics(&field_val_with_header, super::HeaderType::Var(2), 10);
+        }
+        #[test]
+        fn test_numeric_variable_length_odds_digits() {
+            let field_val = String::from("12345678901");
+            let mut field_val_with_header = field_val.len().to_string();
+            field_val_with_header = field_val_with_header + &field_val;
+
+            tester_for_numerics(&field_val_with_header, super::HeaderType::Var(2), 11);
+        }
+        #[test]
+        fn test_numeric_variable_length_99_digits() {
+            let field_val = String::from("1012345678901234567890");
+            let mut field_val_with_header = field_val.len().to_string();
+            field_val_with_header = field_val_with_header + &field_val;
+
+            tester_for_numerics(&field_val_with_header, super::HeaderType::Var(2), 10);
         }
 
         fn tester_for_numerics(
@@ -393,7 +443,12 @@ mod iso8583_parser {
                     .collect(),
             };
 
-            let iso_fragment_bytes = super::decode_hex(&iso_fragment).unwrap();
+            let mut padded_iso_fragment = String::from(iso_fragment);
+            if padded_iso_fragment.len() % 2 != 0 {
+                padded_iso_fragment.push_str(&"0");
+            };
+
+            let iso_fragment_bytes = super::decode_hex(&padded_iso_fragment).unwrap();
 
             let (result_field_val, _) = super::parse_field(
                 &iso_fragment_bytes,
@@ -416,7 +471,7 @@ mod iso8583_parser {
 
         #[test]
         fn fixed_length_ascii() {
-            let val = "abcdefghijklmn".to_string(); // 14 char
+            let val = "t6ppj".to_string(); // 14 char
             let max_length = val.len();
 
             let field_val_byte = val.as_bytes();
