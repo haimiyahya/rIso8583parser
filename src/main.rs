@@ -60,7 +60,14 @@ mod iso8583_parser {
         UNKNOWN,
     }
 
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Debug, Clone, Copy)]
+    pub struct FieldTypeDetail {
+        data_class: FieldDataClass,
+        field_type: FieldType,
+        total_char_per_byte: usize,
+    }
+
+    #[derive(PartialEq, Debug, Clone, Copy)]
     pub enum FieldDataClass {
         StringFieldType,
         BytesFieldType,
@@ -75,7 +82,7 @@ mod iso8583_parser {
     #[derive(Debug)]
     pub struct DataElement {
         position: usize,
-        data_type: FieldType,
+        data_type: FieldTypeDetail,
         header_type: HeaderType,
         max_len: usize,
     }
@@ -83,7 +90,7 @@ mod iso8583_parser {
     impl DataElement {
         fn new(
             position: usize,
-            data_type: FieldType,
+            data_type: FieldTypeDetail,
             header_type: HeaderType,
             max_len: usize,
         ) -> DataElement {
@@ -119,21 +126,65 @@ mod iso8583_parser {
                 let field_format = value;
                 let mut tokens = field_format.split_whitespace();
 
-                let field_type = if let Some(part) = tokens.next() {
+                let field_type_detail = if let Some(part) = tokens.next() {
                     match part {
-                        "a" => FieldType::A,
-                        "n" => FieldType::N,
-                        "s" => FieldType::S,
-                        "an" => FieldType::AN,
-                        "as" => FieldType::AS,
-                        "ns" => FieldType::NS,
-                        "ans" => FieldType::ANS,
-                        "b" => FieldType::B,
-                        "z" => FieldType::Z,
-                        _ => FieldType::UNKNOWN,
+                        "a" => FieldTypeDetail {
+                            data_class: FieldDataClass::StringFieldType,
+                            field_type: FieldType::A,
+                            total_char_per_byte: 1,
+                        },
+                        "n" => FieldTypeDetail {
+                            data_class: FieldDataClass::StringFieldType,
+                            field_type: FieldType::N,
+                            total_char_per_byte: 2,
+                        },
+                        "s" => FieldTypeDetail {
+                            data_class: FieldDataClass::StringFieldType,
+                            field_type: FieldType::S,
+                            total_char_per_byte: 1,
+                        },
+                        "an" => FieldTypeDetail {
+                            data_class: FieldDataClass::StringFieldType,
+                            field_type: FieldType::AN,
+                            total_char_per_byte: 1,
+                        },
+                        "as" => FieldTypeDetail {
+                            data_class: FieldDataClass::StringFieldType,
+                            field_type: FieldType::AS,
+                            total_char_per_byte: 1,
+                        },
+                        "ns" => FieldTypeDetail {
+                            data_class: FieldDataClass::StringFieldType,
+                            field_type: FieldType::NS,
+                            total_char_per_byte: 1,
+                        },
+                        "ans" => FieldTypeDetail {
+                            data_class: FieldDataClass::StringFieldType,
+                            field_type: FieldType::ANS,
+                            total_char_per_byte: 1,
+                        },
+                        "b" => FieldTypeDetail {
+                            data_class: FieldDataClass::BytesFieldType,
+                            field_type: FieldType::B,
+                            total_char_per_byte: 2,
+                        },
+                        "z" => FieldTypeDetail {
+                            data_class: FieldDataClass::StringFieldType,
+                            field_type: FieldType::Z,
+                            total_char_per_byte: 2,
+                        },
+                        _ => FieldTypeDetail {
+                            data_class: FieldDataClass::StringFieldType,
+                            field_type: FieldType::UNKNOWN,
+                            total_char_per_byte: 1,
+                        },
                     }
                 } else {
-                    FieldType::UNKNOWN
+                    FieldTypeDetail {
+                        data_class: FieldDataClass::StringFieldType,
+                        field_type: FieldType::UNKNOWN,
+                        total_char_per_byte: 1,
+                    }
                 };
 
                 let (header_type, max_len) = if let Some(part) = tokens.next() {
@@ -160,7 +211,7 @@ mod iso8583_parser {
 
                 elements_spec.insert(
                     *pos,
-                    DataElement::new(*pos, field_type, header_type, max_len),
+                    DataElement::new(*pos, field_type_detail, header_type, max_len),
                 );
             }
 
@@ -241,23 +292,13 @@ mod iso8583_parser {
         bytes: &'a [u8],
         header_type: HeaderType,
         max_length: usize,
-        field_type: FieldType,
+        field_type_detail: FieldTypeDetail,
     ) -> (DataElementValue, &'a [u8]) {
-        let total_char_per_byte = match field_type {
-            FieldType::A
-            | FieldType::S
-            | FieldType::AN
-            | FieldType::AS
-            | FieldType::NS
-            | FieldType::ANS => 1,
-            FieldType::B => 2,
-            _ => 2,
-        };
-
-        let data_class = match field_type {
-            FieldType::B => FieldDataClass::BytesFieldType,
-            _ => FieldDataClass::StringFieldType,
-        };
+        let FieldTypeDetail {
+            data_class,
+            field_type,
+            total_char_per_byte,
+        } = field_type_detail;
 
         let (head_len, data_len) = match header_type {
             HeaderType::Var(head_len) => {
@@ -358,7 +399,11 @@ mod iso8583_parser {
                 &iso_fragment_bytes,
                 header_type,
                 max_length,
-                super::FieldType::N,
+                super::FieldTypeDetail {
+                    data_class: super::FieldDataClass::StringFieldType,
+                    field_type: super::FieldType::N,
+                    total_char_per_byte: 2,
+                },
             );
 
             match result_field_val {
@@ -380,7 +425,11 @@ mod iso8583_parser {
                 &field_val_byte,
                 super::HeaderType::Fixed,
                 max_length,
-                super::FieldType::AN,
+                super::FieldTypeDetail {
+                    data_class: super::FieldDataClass::StringFieldType,
+                    field_type: super::FieldType::AN,
+                    total_char_per_byte: 1,
+                },
             );
 
             match result_field_val {
