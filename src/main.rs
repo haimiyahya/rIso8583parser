@@ -468,8 +468,6 @@ mod iso8583_parser {
                 padded_iso_fragment.push_str(&"0");
             };
 
-            println!("{}", padded_iso_fragment);
-
             let iso_fragment_bytes = super::decode_hex(&padded_iso_fragment).unwrap();
 
             let (result_field_val, _) = super::parse_field(
@@ -516,6 +514,70 @@ mod iso8583_parser {
                 _ => (),
             }
         }
+        #[test]
+        fn test_ascii_fixed_length_input_exact() {
+            let field_val = String::from("abcdefghij");
+            tester_for_ascii(&field_val, super::HeaderType::Fixed, 10);
+        }
+        #[test]
+        fn test_ascii_fixed_length_input_extra_1() {
+            let field_val = String::from("abcdefghijk");
+            tester_for_ascii(&field_val, super::HeaderType::Fixed, 10);
+        }
+        #[test]
+        fn test_ascii_fixed_length_input_extra_numeric() {
+            let field_val = String::from("1234567890123");
+            tester_for_ascii(&field_val, super::HeaderType::Fixed, 11);
+        }
+        #[test]
+        fn test_ascii_variable_length() {
+            let field_val = String::from("abcdefghijklmn");
+            tester_for_ascii(&field_val, super::HeaderType::Var(2), 99);
+        }
+
+        pub fn tester_for_ascii(iso_fragment: &str,
+            header_type: super::HeaderType,
+            max_length: usize,){
+
+            let max_length = max_length;
+
+            let field_header = match header_type {
+                super::HeaderType::Fixed => String::from(""),
+                super::HeaderType::Var(header_size) => {
+                    let header_size = super::make_even(header_size);
+                    let mut field_header = format!("{:0>width$}", iso_fragment.len().to_string(), width = header_size);
+                    field_header
+                },
+            };
+
+            let field_header_bytes = super::decode_hex(&field_header).unwrap();
+
+            let original: String = iso_fragment.chars().take(max_length).collect();
+            
+            let iso_fragment_bytes = iso_fragment.as_bytes();
+
+            let field_bytes:Vec<u8> = [field_header_bytes, iso_fragment_bytes.to_vec()].concat();
+
+            let (result_field_val, _) = super::parse_field(
+                &field_bytes,
+                header_type,
+                max_length,
+                super::FieldTypeDetail {
+                    data_class: super::FieldDataClass::StringFieldType,
+                    field_type: super::FieldType::ANS,
+                    total_char_per_byte: 1,
+                },
+            );
+
+            match result_field_val {
+                super::DataElementValue::StringVal(parsed) => {
+                    assert_eq!(original, parsed);
+                }
+                _ => (),
+            }
+
+        }
+
     }
 
     pub fn split_bitmap_and_data(iso_msg: &[u8]) -> (&[u8], &[u8]) {
