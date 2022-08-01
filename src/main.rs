@@ -319,7 +319,7 @@ mod iso8583_parser {
                     make_even(max_length)
                 } 
                 else if total_unit_per_byte == 8 {
-                    max_length / 8
+                    max_length
                 }
                 else {
                     max_length
@@ -346,7 +346,6 @@ mod iso8583_parser {
             encode_hex(&bytes[pos..end_pos])
         };
 
-        //let field_val = encode_hex(&bytes[pos..end_pos]);
         let field_val = if max_length > 0
             && field_val.len() > max_length
             && data_class == FieldDataClass::StringFieldType
@@ -622,8 +621,8 @@ mod iso8583_parser {
             );
 
             match result_field_val {
-                super::DataElementValue::StringVal(parsed) => {
-                    assert_eq!(original, parsed);
+                super::DataElementValue::ByteVal(parsed) => {
+                    assert_eq!(iso_fragment_bytes, parsed);
                 }
                 _ => (),
             }
