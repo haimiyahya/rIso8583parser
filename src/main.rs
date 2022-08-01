@@ -395,36 +395,40 @@ mod iso8583_parser {
         }
 
         #[test]
-        fn test_numeric_variable_length_exact() {
+        fn test_numeric_variable_length_2_digits_header_exact() {
             let field_val = String::from("1234567890");
-            let mut field_val_with_header = field_val.len().to_string();
-            field_val_with_header = field_val_with_header + &field_val;
 
-            tester_for_numerics(&field_val_with_header, super::HeaderType::Var(2), 10);
+            tester_for_numerics(&field_val, super::HeaderType::Var(2), 10);
         }
         #[test]
-        fn test_numeric_variable_length_longer_10_digits() {
+        fn test_numeric_variable_length_2_digits_header_longer_10_digits() {
             let field_val = String::from("12345678901234567890");
-            let mut field_val_with_header = field_val.len().to_string();
-            field_val_with_header = field_val_with_header + &field_val;
 
-            tester_for_numerics(&field_val_with_header, super::HeaderType::Var(2), 10);
+            tester_for_numerics(&field_val, super::HeaderType::Var(2), 10);
         }
         #[test]
-        fn test_numeric_variable_length_odds_digits() {
+        fn test_numeric_variable_length_2_digits_header_odds_digits() {
             let field_val = String::from("12345678901");
-            let mut field_val_with_header = field_val.len().to_string();
-            field_val_with_header = field_val_with_header + &field_val;
 
-            tester_for_numerics(&field_val_with_header, super::HeaderType::Var(2), 11);
+            tester_for_numerics(&field_val, super::HeaderType::Var(2), 11);
         }
         #[test]
-        fn test_numeric_variable_length_99_digits() {
-            let field_val = String::from("1012345678901234567890");
-            let mut field_val_with_header = field_val.len().to_string();
-            field_val_with_header = field_val_with_header + &field_val;
+        fn test_numeric_variable_length_length_3_digits_header_exact() {
+            let field_val = String::from("1234567890");
 
-            tester_for_numerics(&field_val_with_header, super::HeaderType::Var(2), 10);
+            tester_for_numerics(&field_val, super::HeaderType::Var(3), 10);
+        }
+        #[test]
+        fn test_numeric_variable_length_length_3_digits_header_longer() {
+            let field_val = String::from("1234567890");
+
+            tester_for_numerics(&field_val, super::HeaderType::Var(3), 7);
+        }
+        #[test]
+        fn test_numeric_variable_length_length_3_digits_header_longer2() {
+            let field_val = String::from("1234567890");
+
+            tester_for_numerics(&field_val, super::HeaderType::Var(3), 999);
         }
 
         fn tester_for_numerics(
@@ -434,19 +438,37 @@ mod iso8583_parser {
         ) {
             let max_length = max_length;
 
+            let field_val_with_header = match header_type {
+                super::HeaderType::Fixed => String::from(iso_fragment),
+                super::HeaderType::Var(header_size) => {
+                    let header_size = super::make_even(header_size);
+                    let mut field_val_with_header = format!("{:0>width$}", iso_fragment.len().to_string(), width = header_size);
+                    
+                    field_val_with_header = field_val_with_header + &iso_fragment;
+
+                    if field_val_with_header.len() % 2 != 0 {
+                        field_val_with_header.push_str(&"0");
+                    }
+
+                    field_val_with_header
+                },
+            };
+
             let original: String = match header_type {
-                super::HeaderType::Fixed => iso_fragment.chars().take(max_length).collect(),
-                super::HeaderType::Var(header_size) => iso_fragment
+                super::HeaderType::Fixed => field_val_with_header.chars().take(max_length).collect(),
+                super::HeaderType::Var(header_size) => field_val_with_header
                     .chars()
-                    .skip(header_size)
+                    .skip(super::make_even(header_size))
                     .take(max_length)
                     .collect(),
             };
 
-            let mut padded_iso_fragment = String::from(iso_fragment);
+            let mut padded_iso_fragment = String::from(field_val_with_header);
             if padded_iso_fragment.len() % 2 != 0 {
                 padded_iso_fragment.push_str(&"0");
             };
+
+            println!("{}", padded_iso_fragment);
 
             let iso_fragment_bytes = super::decode_hex(&padded_iso_fragment).unwrap();
 
@@ -471,7 +493,7 @@ mod iso8583_parser {
 
         #[test]
         fn fixed_length_ascii() {
-            let val = "t6ppj".to_string(); // 14 char
+            let val = "kfkfjksdfkasfj".to_string(); // 14 char
             let max_length = val.len();
 
             let field_val_byte = val.as_bytes();
