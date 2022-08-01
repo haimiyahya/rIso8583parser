@@ -64,7 +64,7 @@ mod iso8583_parser {
     pub struct FieldTypeDetail {
         data_class: FieldDataClass,
         field_type: FieldType,
-        total_char_per_byte: usize,
+        total_unit_per_byte: usize,
     }
 
     #[derive(PartialEq, Debug, Clone, Copy)]
@@ -131,59 +131,59 @@ mod iso8583_parser {
                         "a" => FieldTypeDetail {
                             data_class: FieldDataClass::StringFieldType,
                             field_type: FieldType::A,
-                            total_char_per_byte: 1,
+                            total_unit_per_byte: 1,
                         },
                         "n" => FieldTypeDetail {
                             data_class: FieldDataClass::StringFieldType,
                             field_type: FieldType::N,
-                            total_char_per_byte: 2,
+                            total_unit_per_byte: 2,
                         },
                         "s" => FieldTypeDetail {
                             data_class: FieldDataClass::StringFieldType,
                             field_type: FieldType::S,
-                            total_char_per_byte: 1,
+                            total_unit_per_byte: 1,
                         },
                         "an" => FieldTypeDetail {
                             data_class: FieldDataClass::StringFieldType,
                             field_type: FieldType::AN,
-                            total_char_per_byte: 1,
+                            total_unit_per_byte: 1,
                         },
                         "as" => FieldTypeDetail {
                             data_class: FieldDataClass::StringFieldType,
                             field_type: FieldType::AS,
-                            total_char_per_byte: 1,
+                            total_unit_per_byte: 1,
                         },
                         "ns" => FieldTypeDetail {
                             data_class: FieldDataClass::StringFieldType,
                             field_type: FieldType::NS,
-                            total_char_per_byte: 1,
+                            total_unit_per_byte: 1,
                         },
                         "ans" => FieldTypeDetail {
                             data_class: FieldDataClass::StringFieldType,
                             field_type: FieldType::ANS,
-                            total_char_per_byte: 1,
+                            total_unit_per_byte: 1,
                         },
                         "b" => FieldTypeDetail {
                             data_class: FieldDataClass::BytesFieldType,
                             field_type: FieldType::B,
-                            total_char_per_byte: 2,
+                            total_unit_per_byte: 8,
                         },
                         "z" => FieldTypeDetail {
                             data_class: FieldDataClass::StringFieldType,
                             field_type: FieldType::Z,
-                            total_char_per_byte: 2,
+                            total_unit_per_byte: 2,
                         },
                         _ => FieldTypeDetail {
                             data_class: FieldDataClass::StringFieldType,
                             field_type: FieldType::UNKNOWN,
-                            total_char_per_byte: 1,
+                            total_unit_per_byte: 1,
                         },
                     }
                 } else {
                     FieldTypeDetail {
                         data_class: FieldDataClass::StringFieldType,
                         field_type: FieldType::UNKNOWN,
-                        total_char_per_byte: 1,
+                        total_unit_per_byte: 1,
                     }
                 };
 
@@ -297,7 +297,7 @@ mod iso8583_parser {
         let FieldTypeDetail {
             data_class,
             field_type: _,
-            total_char_per_byte,
+            total_unit_per_byte,
         } = field_type_detail;
 
         let (head_len, data_len) = match header_type {
@@ -306,22 +306,26 @@ mod iso8583_parser {
                 let head_val = encode_hex(&bytes[0..head_len]);
                 let head_val = head_val.parse::<usize>().unwrap();
 
-                let total_data_bytes = if total_char_per_byte == 2 {
+                let total_data_bytes = if total_unit_per_byte == 2 {
                     make_even(head_val)
                 } else {
                     head_val
                 };
-                let data_len: usize = total_data_bytes / total_char_per_byte;
+                let data_len: usize = total_data_bytes / total_unit_per_byte;
                 (head_len, data_len)
             }
             HeaderType::Fixed => {
-                let total_data_bytes = if total_char_per_byte == 2 {
+                let total_data_bytes = if total_unit_per_byte == 2 {
                     make_even(max_length)
-                } else {
+                } 
+                else if total_unit_per_byte == 8 {
+                    max_length / 8
+                }
+                else {
                     max_length
                 };
 
-                let data_len: usize = total_data_bytes / total_char_per_byte;
+                let data_len: usize = total_data_bytes / total_unit_per_byte;
                 (0, data_len)
             }
         };
@@ -329,13 +333,17 @@ mod iso8583_parser {
         let pos: usize = head_len;
         let end_pos: usize = pos + data_len;
 
-        let field_val = if total_char_per_byte == 2 {
-            encode_hex(&bytes[pos..end_pos])
-        } else {
-            match str::from_utf8(&bytes[pos..end_pos]) {
-                Ok(v) => v.to_string(),
-                Err(e) => "".to_string(),
+        let field_val = if data_class == FieldDataClass::StringFieldType {
+            if total_unit_per_byte == 2 {
+                encode_hex(&bytes[pos..end_pos])
+            } else {
+                match str::from_utf8(&bytes[pos..end_pos]) {
+                    Ok(v) => v.to_string(),
+                    Err(e) => "".to_string(),
+                }
             }
+        } else {
+            encode_hex(&bytes[pos..end_pos])
         };
 
         //let field_val = encode_hex(&bytes[pos..end_pos]);
@@ -467,7 +475,7 @@ mod iso8583_parser {
                 super::FieldTypeDetail {
                     data_class: super::FieldDataClass::StringFieldType,
                     field_type: super::FieldType::N,
-                    total_char_per_byte: 2,
+                    total_unit_per_byte: 2,
                 },
             );
 
@@ -493,7 +501,7 @@ mod iso8583_parser {
                 super::FieldTypeDetail {
                     data_class: super::FieldDataClass::StringFieldType,
                     field_type: super::FieldType::AN,
-                    total_char_per_byte: 1,
+                    total_unit_per_byte: 1,
                 },
             );
 
@@ -555,7 +563,61 @@ mod iso8583_parser {
                 super::FieldTypeDetail {
                     data_class: super::FieldDataClass::StringFieldType,
                     field_type: super::FieldType::ANS,
-                    total_char_per_byte: 1,
+                    total_unit_per_byte: 1,
+                },
+            );
+
+            match result_field_val {
+                super::DataElementValue::StringVal(parsed) => {
+                    assert_eq!(original, parsed);
+                }
+                _ => (),
+            }
+
+        }
+
+        #[test]
+        fn test_bytes_fixed_length() {
+            let field_val = String::from("10101010");
+            tester_for_bytes(&field_val, super::HeaderType::Fixed, 32);
+        }
+
+        pub fn tester_for_bytes(iso_fragment: &str,
+            header_type: super::HeaderType,
+            max_length: usize,){
+
+            let max_length = max_length;
+
+            let field_header = match header_type {
+                super::HeaderType::Fixed => String::from(""),
+                super::HeaderType::Var(header_size) => {
+                    let header_size = super::make_even(header_size);
+                    let field_header = format!("{:0>width$}", iso_fragment.len().to_string(), width = header_size);
+                    field_header
+                },
+            };
+
+            let field_header_bytes = super::decode_hex(&field_header).unwrap();
+
+            let original: String = iso_fragment.chars().take(max_length).collect();
+
+            let mut padded_iso_fragment = String::from(iso_fragment);
+            if padded_iso_fragment.len() % 2 != 0 {
+                padded_iso_fragment.push_str(&"0");
+            };
+            
+            let iso_fragment_bytes = super::decode_hex(&padded_iso_fragment).unwrap();
+
+            let field_bytes:Vec<u8> = [field_header_bytes, iso_fragment_bytes.to_vec()].concat();
+
+            let (result_field_val, _) = super::parse_field(
+                &field_bytes,
+                header_type,
+                max_length,
+                super::FieldTypeDetail {
+                    data_class: super::FieldDataClass::BytesFieldType,
+                    field_type: super::FieldType::B,
+                    total_unit_per_byte: 8,
                 },
             );
 
@@ -730,8 +792,6 @@ fn main() {
     let parser = iso8583_parser::Parser::new(&iso_data_elements_spec);
 
     let txn = parser.parse_isomsg(&iso_msg);
-
-    println!("{:#?}", txn);
 
     let txn_specific = map_txn_type(txn);
 
