@@ -296,7 +296,7 @@ mod iso8583_parser {
     ) -> (DataElementValue, &'a [u8]) {
         let FieldTypeDetail {
             data_class,
-            field_type,
+            field_type: _,
             total_char_per_byte,
         } = field_type_detail;
 
@@ -438,40 +438,30 @@ mod iso8583_parser {
         ) {
             let max_length = max_length;
 
-            let field_val_with_header = match header_type {
-                super::HeaderType::Fixed => String::from(iso_fragment),
+            let field_header = match header_type {
+                super::HeaderType::Fixed => String::from(""),
                 super::HeaderType::Var(header_size) => {
                     let header_size = super::make_even(header_size);
-                    let mut field_val_with_header = format!("{:0>width$}", iso_fragment.len().to_string(), width = header_size);
-                    
-                    field_val_with_header = field_val_with_header + &iso_fragment;
-
-                    if field_val_with_header.len() % 2 != 0 {
-                        field_val_with_header.push_str(&"0");
-                    }
-
-                    field_val_with_header
+                    let field_header = format!("{:0>width$}", iso_fragment.len().to_string(), width = header_size);
+                    field_header
                 },
             };
 
-            let original: String = match header_type {
-                super::HeaderType::Fixed => field_val_with_header.chars().take(max_length).collect(),
-                super::HeaderType::Var(header_size) => field_val_with_header
-                    .chars()
-                    .skip(super::make_even(header_size))
-                    .take(max_length)
-                    .collect(),
-            };
+            let field_header_bytes = super::decode_hex(&field_header).unwrap();
 
-            let mut padded_iso_fragment = String::from(field_val_with_header);
+            let original: String = iso_fragment.chars().take(max_length).collect();
+
+            let mut padded_iso_fragment = String::from(iso_fragment);
             if padded_iso_fragment.len() % 2 != 0 {
                 padded_iso_fragment.push_str(&"0");
             };
-
+            
             let iso_fragment_bytes = super::decode_hex(&padded_iso_fragment).unwrap();
 
+            let field_bytes:Vec<u8> = [field_header_bytes, iso_fragment_bytes.to_vec()].concat();
+
             let (result_field_val, _) = super::parse_field(
-                &iso_fragment_bytes,
+                &field_bytes,
                 header_type,
                 max_length,
                 super::FieldTypeDetail {
@@ -545,7 +535,7 @@ mod iso8583_parser {
                 super::HeaderType::Fixed => String::from(""),
                 super::HeaderType::Var(header_size) => {
                     let header_size = super::make_even(header_size);
-                    let mut field_header = format!("{:0>width$}", iso_fragment.len().to_string(), width = header_size);
+                    let field_header = format!("{:0>width$}", iso_fragment.len().to_string(), width = header_size);
                     field_header
                 },
             };
