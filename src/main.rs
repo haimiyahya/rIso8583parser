@@ -1,53 +1,11 @@
-pub struct Sale {
-    mti: String,
-    proc_code: String,
-    amount: String,
-    hash: String,
-}
-
-pub struct Void {
-    mti: String,
-    proc_code: String,
-    amount: String,
-}
-
-pub enum TxnType {
-    SaleTxn(Sale),
-    VoidTxn(Void),
-}
-
-pub fn map_txn_type(txn: iso8583_parser::Txn) -> TxnType {
-    match txn {
-        iso8583_parser::Txn { mti: ref sale, .. } if sale == "0200" => {
-            let sale_txn = Sale {
-                mti: String::from("0200"),
-                proc_code: String::from("000000"),
-                amount: String::from("10.0"),
-                hash: String::from("1234"),
-            };
-
-            TxnType::SaleTxn(sale_txn)
-        }
-        iso8583_parser::Txn { .. } => {
-            let void_txn = Void {
-                mti: String::from("0200"),
-                proc_code: String::from("000000"),
-                amount: String::from("10.0"),
-            };
-
-            TxnType::VoidTxn(void_txn)
-        }
-    }
-}
-
 mod iso8583_parser {
 
     use std::collections::BTreeMap;
     use std::str;
-    use std::{fmt::Write, num::ParseIntError};
 
     #[derive(PartialEq, Debug, Clone, Copy)]
-    pub enum FieldType {
+    #[allow(dead_code)]
+    enum FieldType {
         A,
         N,
         S,
@@ -60,45 +18,154 @@ mod iso8583_parser {
         UNKNOWN,
     }
 
-    #[derive(PartialEq, Debug, Clone, Copy)]
-    pub struct FieldTypeDetail {
-        data_class: FieldDataClass,
-        field_type: FieldType,
-        total_unit_per_byte: usize,
+    impl FieldType {
+        fn new(field_type: &str) -> FieldType {
+            match field_type {
+                "a" => FieldType::A,
+                "n" => FieldType::N,
+                "s" => FieldType::S,
+                "an" => FieldType::ANS,
+                "as" => FieldType::AS,
+                "ns" => FieldType::NS,
+                "ans" => FieldType::ANS,
+                "b" => FieldType::B,
+                "z" => FieldType::Z,
+                _ => FieldType::UNKNOWN,
+            }
+        }
+
+        fn get_data_class(&self) -> DataClass {
+            match *self {
+                FieldType::A
+                | FieldType::N
+                | FieldType::S
+                | FieldType::AN
+                | FieldType::AS
+                | FieldType::NS
+                | FieldType::ANS
+                | FieldType::Z
+                | FieldType::UNKNOWN => DataClass::StringType,
+                FieldType::B => DataClass::BytesType,
+            }
+        }
+
+        fn get_total_unit_per_byte(&self) -> usize {
+            match *self {
+                FieldType::A
+                | FieldType::S
+                | FieldType::AN
+                | FieldType::AS
+                | FieldType::NS
+                | FieldType::ANS
+                | FieldType::UNKNOWN => 1,
+                FieldType::N | FieldType::Z => 2,
+                FieldType::B => 8,
+            }
+        }
+
+        fn total_data_bytes(&self, value: usize) -> usize {
+            let total_bytes = if self.get_total_unit_per_byte() == 2 {
+                Utils::make_even(value)
+            } else {
+                value
+            };
+
+            total_bytes / self.get_total_unit_per_byte()
+        }
+
+        fn translate(&self, field_bytes: &[u8]) -> String {
+            if self.get_data_class() == DataClass::StringType && self.get_total_unit_per_byte() == 1
+            {
+                match str::from_utf8(field_bytes) {
+                    Ok(v) => v.to_string(),
+                    Err(_) => "".to_string(),
+                }
+            } else {
+                Utils::encode_hex(field_bytes)
+            }
+        }
     }
 
     #[derive(PartialEq, Debug, Clone, Copy)]
-    pub enum FieldDataClass {
-        StringFieldType,
-        BytesFieldType,
+    #[allow(dead_code)]
+    enum DataClass {
+        StringType,
+        BytesType,
+    }
+
+    impl DataClass {
+        fn get_element_value(&self, field_val: &str) -> DataElementValue {
+            match *self {
+                DataClass::StringType => DataElementValue::StringVal(field_val.to_string()),
+                DataClass::BytesType => {
+                    DataElementValue::ByteVal(Utils::decode_hex(&field_val).unwrap())
+                }
+            }
+        }
+
+        fn truncate(&self, field_val: &str, max_length: usize) -> String {
+            if field_val.len() > max_length {
+                match *self {
+                    DataClass::StringType => String::from(&field_val[0..max_length]),
+                    _ => String::from(field_val),
+                }
+            } else {
+                String::from(field_val)
+            }
+        }
     }
 
     #[derive(Debug, Clone, Copy)]
-    pub enum HeaderType {
-        Var(usize),
+    #[allow(dead_code)]
+    enum HeaderType {
+        Var(usize, HeaderFormat),
         Fixed,
     }
 
+    impl HeaderType {
+        fn get_header_hex(&self) -> usize {
+            match *self {
+                HeaderType::Var(head_len, header_format) => match header_format {
+                    HeaderFormat::BCD => Utils::make_even(head_len) / 2,
+                    HeaderFormat::ASCII => head_len,
+                },
+                _ => 0,
+            }
+        }
+
+        fn translate(&self, field_bytes: &[u8]) -> String {
+            match *self {
+                HeaderType::Var(_, header_format) => match header_format {
+                    HeaderFormat::BCD => Utils::encode_hex(field_bytes),
+                    HeaderFormat::ASCII => match str::from_utf8(field_bytes) {
+                        Ok(v) => v.to_string(),
+                        Err(_) => "".to_string(),
+                    },
+                },
+                _ => String::from(""),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum HeaderFormat {
+        BCD,
+        ASCII,
+    }
+
     #[derive(Debug)]
-    pub struct DataElement {
-        position: usize,
-        data_type: FieldTypeDetail,
+    struct DataElement {
         header_type: HeaderType,
+        field_type: FieldType,
         max_len: usize,
     }
 
     impl DataElement {
-        fn new(
-            position: usize,
-            data_type: FieldTypeDetail,
-            header_type: HeaderType,
-            max_len: usize,
-        ) -> DataElement {
+        fn new(header_type: HeaderType, field_type: FieldType, max_len: usize) -> DataElement {
             DataElement {
-                position: position,
-                data_type: data_type,
-                header_type: header_type,
-                max_len: max_len,
+                header_type,
+                field_type,
+                max_len,
             }
         }
     }
@@ -109,11 +176,6 @@ mod iso8583_parser {
         ByteVal(Vec<u8>),
     }
 
-    #[derive(Debug)]
-    pub struct Txn {
-        pub mti: String,
-        pub fields: BTreeMap<usize, DataElementValue>,
-    }
     pub struct Parser {
         elements_spec: BTreeMap<usize, DataElement>,
     }
@@ -123,96 +185,9 @@ mod iso8583_parser {
             let mut elements_spec: BTreeMap<usize, DataElement> = BTreeMap::new();
 
             for (pos, value) in iso_elements_spec {
-                let field_format = value;
-                let mut tokens = field_format.split_whitespace();
+                let data_element = Self::parse_element_spec(value);
 
-                let field_type_detail = if let Some(part) = tokens.next() {
-                    match part {
-                        "a" => FieldTypeDetail {
-                            data_class: FieldDataClass::StringFieldType,
-                            field_type: FieldType::A,
-                            total_unit_per_byte: 1,
-                        },
-                        "n" => FieldTypeDetail {
-                            data_class: FieldDataClass::StringFieldType,
-                            field_type: FieldType::N,
-                            total_unit_per_byte: 2,
-                        },
-                        "s" => FieldTypeDetail {
-                            data_class: FieldDataClass::StringFieldType,
-                            field_type: FieldType::S,
-                            total_unit_per_byte: 1,
-                        },
-                        "an" => FieldTypeDetail {
-                            data_class: FieldDataClass::StringFieldType,
-                            field_type: FieldType::AN,
-                            total_unit_per_byte: 1,
-                        },
-                        "as" => FieldTypeDetail {
-                            data_class: FieldDataClass::StringFieldType,
-                            field_type: FieldType::AS,
-                            total_unit_per_byte: 1,
-                        },
-                        "ns" => FieldTypeDetail {
-                            data_class: FieldDataClass::StringFieldType,
-                            field_type: FieldType::NS,
-                            total_unit_per_byte: 1,
-                        },
-                        "ans" => FieldTypeDetail {
-                            data_class: FieldDataClass::StringFieldType,
-                            field_type: FieldType::ANS,
-                            total_unit_per_byte: 1,
-                        },
-                        "b" => FieldTypeDetail {
-                            data_class: FieldDataClass::BytesFieldType,
-                            field_type: FieldType::B,
-                            total_unit_per_byte: 8,
-                        },
-                        "z" => FieldTypeDetail {
-                            data_class: FieldDataClass::StringFieldType,
-                            field_type: FieldType::Z,
-                            total_unit_per_byte: 2,
-                        },
-                        _ => FieldTypeDetail {
-                            data_class: FieldDataClass::StringFieldType,
-                            field_type: FieldType::UNKNOWN,
-                            total_unit_per_byte: 1,
-                        },
-                    }
-                } else {
-                    FieldTypeDetail {
-                        data_class: FieldDataClass::StringFieldType,
-                        field_type: FieldType::UNKNOWN,
-                        total_unit_per_byte: 1,
-                    }
-                };
-
-                let (header_type, max_len) = if let Some(part) = tokens.next() {
-                    let mut header_len: usize = 0;
-                    for c in part.chars() {
-                        if c == '.' {
-                            header_len = header_len + 1;
-                        }
-                    }
-
-                    let cur_pos = header_len;
-                    let cur_pos: usize = usize::from(cur_pos);
-
-                    let max_len = &part[cur_pos..];
-                    let max_len = match max_len.trim().parse::<usize>() {
-                        Ok(length) => length,
-                        Err(..) => 0,
-                    };
-                    (HeaderType::Var(header_len), max_len)
-                } else {
-                    let max_len: usize = 0;
-                    (HeaderType::Fixed, max_len)
-                };
-
-                elements_spec.insert(
-                    *pos,
-                    DataElement::new(*pos, field_type_detail, header_type, max_len),
-                );
+                elements_spec.insert(*pos, data_element);
             }
 
             Parser {
@@ -220,9 +195,43 @@ mod iso8583_parser {
             }
         }
 
+        fn parse_element_spec(element_spec: &str) -> DataElement {
+            let field_format = element_spec;
+            let mut tokens = field_format.split_whitespace();
+
+            let field_type = if let Some(part) = tokens.next() {
+                FieldType::new(part)
+            } else {
+                FieldType::new("")
+            };
+
+            let (header_type, max_len) = if let Some(part) = tokens.next() {
+                let mut header_len: usize = 0;
+                for c in part.chars() {
+                    if c == '.' {
+                        header_len = header_len + 1;
+                    }
+                }
+
+                let cur_pos = header_len;
+                let cur_pos: usize = usize::from(cur_pos);
+
+                let max_len = &part[cur_pos..];
+                let max_len = match max_len.trim().parse::<usize>() {
+                    Ok(length) => length,
+                    Err(..) => 0,
+                };
+                (HeaderType::Var(header_len, HeaderFormat::BCD), max_len)
+            } else {
+                (HeaderType::Fixed, 0)
+            };
+
+            DataElement::new(header_type, field_type, max_len)
+        }
+
         pub fn parse_isomsg(&self, bytes: &[u8]) -> Txn {
             let (mti, bitmap, data) = split_main_components(&bytes);
-            let bitmap_binstr = encode_bin(&bitmap);
+            let bitmap_binstr = Utils::encode_bin(&bitmap);
             let mut iso_data = data;
             let field_format = &self.elements_spec;
 
@@ -231,100 +240,47 @@ mod iso8583_parser {
             for (i, c) in bitmap_binstr.chars().enumerate() {
                 if c == '1' {
                     let field_pos = i + 1;
-                    let field_element = &field_format[&field_pos];
 
-                    let (header_type, field_type, max_len) = match field_element {
-                        DataElement {
-                            position: _,
-                            data_type: field_type,
-                            header_type,
-                            max_len,
-                        } => (header_type, field_type, max_len),
-                    };
+                    let DataElement {
+                        header_type,
+                        field_type,
+                        max_len,
+                    } = &field_format[&field_pos];
 
-                    let (field_val, next_data) =
+                    let (field_val, iso_data) =
                         parse_field(&iso_data, *header_type, *max_len, *field_type);
-                    field_vals.insert(i + 1, field_val);
-
-                    iso_data = next_data;
+                    field_vals.insert(field_pos, field_val);
                 }
             }
 
             Txn {
-                mti: encode_hex(mti),
+                mti: Utils::encode_hex(mti),
                 fields: field_vals,
             }
         }
     }
 
-    pub fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
-        (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
-            .collect()
-    }
-
-    pub fn encode_hex(bytes: &[u8]) -> String {
-        let mut s = String::with_capacity(bytes.len() * 2);
-        for &b in bytes {
-            write!(&mut s, "{:02x}", b).unwrap();
-        }
-        s
-    }
-
-    pub fn encode_bin(bytes: &[u8]) -> String {
-        let mut s = String::with_capacity(bytes.len() * 8);
-        for b in bytes {
-            write!(&mut s, "{:01$b}", b, 8).unwrap();
-        }
-        s
-    }
-
-    pub fn make_even(i: usize) -> usize {
-        if i % 2 == 1 {
-            i + 1
-        } else {
-            i
-        }
-    }
-
-    pub fn parse_field<'a>(
+    fn parse_field<'a>(
         bytes: &'a [u8],
         header_type: HeaderType,
         max_length: usize,
-        field_type_detail: FieldTypeDetail,
+        field_type: FieldType,
     ) -> (DataElementValue, &'a [u8]) {
-        let FieldTypeDetail {
-            data_class,
-            field_type: _,
-            total_unit_per_byte,
-        } = field_type_detail;
+        let data_class = field_type.get_data_class();
 
         let (head_len, data_len) = match header_type {
-            HeaderType::Var(head_len) => {
-                let head_len = make_even(head_len) / 2;
-                let head_val = encode_hex(&bytes[0..head_len]);
+            HeaderType::Var(head_len, _header_format) => {
+                //let head_len = Utils::make_even(head_len) / 2;
+                let head_len = Utils::make_even(head_len) / 2;
+                let head_val = Utils::encode_hex(&bytes[0..head_len]);
                 let head_val = head_val.parse::<usize>().unwrap();
-
-                let total_data_bytes = if total_unit_per_byte == 2 {
-                    make_even(head_val)
-                } else {
-                    head_val
-                };
-                let data_len: usize = total_data_bytes / total_unit_per_byte;
+                let data_len = field_type.total_data_bytes(head_val);
 
                 (head_len, data_len)
             }
             HeaderType::Fixed => {
-                let total_data_bytes = if total_unit_per_byte == 2 {
-                    make_even(max_length)
-                } else if total_unit_per_byte == 8 {
-                    max_length
-                } else {
-                    max_length
-                };
+                let data_len = field_type.total_data_bytes(max_length);
 
-                let data_len: usize = total_data_bytes / total_unit_per_byte;
                 (0, data_len)
             }
         };
@@ -332,37 +288,72 @@ mod iso8583_parser {
         let pos: usize = head_len;
         let end_pos: usize = pos + data_len;
 
-        let field_val = if data_class == FieldDataClass::StringFieldType {
-            if total_unit_per_byte == 2 {
-                encode_hex(&bytes[pos..end_pos])
-            } else {
-                match str::from_utf8(&bytes[pos..end_pos]) {
-                    Ok(v) => v.to_string(),
-                    Err(e) => "".to_string(),
-                }
-            }
-        } else {
-            encode_hex(&bytes[pos..end_pos])
-        };
+        // translate
+        let field_val = field_type.translate(&bytes[pos..end_pos]);
 
-        let field_val = if max_length > 0
-            && field_val.len() > max_length
-            && data_class == FieldDataClass::StringFieldType
-        {
-            String::from(&field_val[0..max_length])
-        } else {
-            String::from(&field_val)
-        };
+        // truncate
+        let field_val = data_class.truncate(&field_val, max_length);
 
-        let field_v = {
-            if data_class == FieldDataClass::StringFieldType {
-                DataElementValue::StringVal(field_val)
-            } else {
-                DataElementValue::ByteVal(decode_hex(&field_val).unwrap())
-            }
-        };
+        // encapsulate
+        let field_v = data_class.get_element_value(&field_val);
 
         (field_v, &bytes[end_pos..])
+    }
+
+    pub fn split_bitmap_and_data(iso_msg: &[u8]) -> (&[u8], &[u8]) {
+        match Utils::encode_bin(&iso_msg[0..1]).starts_with("1") {
+            true => (&iso_msg[0..16], &iso_msg[16..]),
+            false => (&iso_msg[0..8], &iso_msg[8..]),
+        }
+    }
+
+    // split MTI, BitMap, Data
+    pub fn split_main_components(bytes: &[u8]) -> (&[u8], &[u8], &[u8]) {
+        let mti = &bytes[0..2];
+        let (bitmap, data) = split_bitmap_and_data(&bytes[2..]);
+        (mti, bitmap, data)
+    }
+
+    pub mod Utils {
+
+        use std::{fmt::Write, num::ParseIntError};
+
+        pub fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
+                .collect()
+        }
+
+        pub fn encode_hex(bytes: &[u8]) -> String {
+            let mut s = String::with_capacity(bytes.len() * 2);
+            for &b in bytes {
+                write!(&mut s, "{:02x}", b).unwrap();
+            }
+            s
+        }
+
+        pub fn encode_bin(bytes: &[u8]) -> String {
+            let mut s = String::with_capacity(bytes.len() * 8);
+            for b in bytes {
+                write!(&mut s, "{:01$b}", b, 8).unwrap();
+            }
+            s
+        }
+
+        pub fn make_even(i: usize) -> usize {
+            if i % 2 == 1 {
+                i + 1
+            } else {
+                i
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct Txn {
+        pub mti: String,
+        pub fields: BTreeMap<usize, DataElementValue>,
     }
 
     #[cfg(test)]
@@ -403,38 +394,44 @@ mod iso8583_parser {
         #[test]
         fn test_numeric_variable_length_2_digits_header_exact() {
             let field_val = String::from("1234567890");
+            let header_type = super::HeaderType::Var(2, super::HeaderFormat::BCD);
 
-            tester_for_numerics(&field_val, super::HeaderType::Var(2), 10);
+            tester_for_numerics(&field_val, header_type, 10);
         }
         #[test]
         fn test_numeric_variable_length_2_digits_header_longer_10_digits() {
             let field_val = String::from("12345678901234567890");
+            let header_type = super::HeaderType::Var(2, super::HeaderFormat::BCD);
 
-            tester_for_numerics(&field_val, super::HeaderType::Var(2), 10);
+            tester_for_numerics(&field_val, header_type, 10);
         }
         #[test]
         fn test_numeric_variable_length_2_digits_header_odds_digits() {
             let field_val = String::from("12345678901");
+            let header_type = super::HeaderType::Var(2, super::HeaderFormat::BCD);
 
-            tester_for_numerics(&field_val, super::HeaderType::Var(2), 11);
+            tester_for_numerics(&field_val, header_type, 11);
         }
         #[test]
         fn test_numeric_variable_length_length_3_digits_header_exact() {
             let field_val = String::from("1234567890");
+            let header_type = super::HeaderType::Var(3, super::HeaderFormat::BCD);
 
-            tester_for_numerics(&field_val, super::HeaderType::Var(3), 10);
+            tester_for_numerics(&field_val, header_type, 10);
         }
         #[test]
         fn test_numeric_variable_length_length_3_digits_header_longer() {
             let field_val = String::from("1234567890");
+            let header_type = super::HeaderType::Var(3, super::HeaderFormat::BCD);
 
-            tester_for_numerics(&field_val, super::HeaderType::Var(3), 7);
+            tester_for_numerics(&field_val, header_type, 7);
         }
         #[test]
         fn test_numeric_variable_length_length_3_digits_header_longer2() {
             let field_val = String::from("1234567890");
+            let header_type = super::HeaderType::Var(3, super::HeaderFormat::BCD);
 
-            tester_for_numerics(&field_val, super::HeaderType::Var(3), 999);
+            tester_for_numerics(&field_val, header_type, 999);
         }
 
         fn tester_for_numerics(
@@ -446,8 +443,8 @@ mod iso8583_parser {
 
             let field_header = match header_type {
                 super::HeaderType::Fixed => String::from(""),
-                super::HeaderType::Var(header_size) => {
-                    let header_size = super::make_even(header_size);
+                super::HeaderType::Var(header_size, _header_format) => {
+                    let header_size = super::Utils::make_even(header_size);
                     let field_header = format!(
                         "{:0>width$}",
                         iso_fragment.len().to_string(),
@@ -457,7 +454,7 @@ mod iso8583_parser {
                 }
             };
 
-            let field_header_bytes = super::decode_hex(&field_header).unwrap();
+            let field_header_bytes = super::Utils::decode_hex(&field_header).unwrap();
 
             let original: String = iso_fragment.chars().take(max_length).collect();
 
@@ -466,20 +463,12 @@ mod iso8583_parser {
                 padded_iso_fragment.push_str(&"0");
             };
 
-            let iso_fragment_bytes = super::decode_hex(&padded_iso_fragment).unwrap();
+            let iso_fragment_bytes = super::Utils::decode_hex(&padded_iso_fragment).unwrap();
 
             let field_bytes: Vec<u8> = [field_header_bytes, iso_fragment_bytes.to_vec()].concat();
 
-            let (result_field_val, _) = super::parse_field(
-                &field_bytes,
-                header_type,
-                max_length,
-                super::FieldTypeDetail {
-                    data_class: super::FieldDataClass::StringFieldType,
-                    field_type: super::FieldType::N,
-                    total_unit_per_byte: 2,
-                },
-            );
+            let (result_field_val, _) =
+                super::parse_field(&field_bytes, header_type, max_length, super::FieldType::N);
 
             match result_field_val {
                 super::DataElementValue::StringVal(parsed) => {
@@ -500,11 +489,7 @@ mod iso8583_parser {
                 &field_val_byte,
                 super::HeaderType::Fixed,
                 max_length,
-                super::FieldTypeDetail {
-                    data_class: super::FieldDataClass::StringFieldType,
-                    field_type: super::FieldType::AN,
-                    total_unit_per_byte: 1,
-                },
+                super::FieldType::AN,
             );
 
             match result_field_val {
@@ -532,20 +517,17 @@ mod iso8583_parser {
         #[test]
         fn test_ascii_variable_length() {
             let field_val = String::from("abcdefghijklmn");
-            tester_for_ascii(&field_val, super::HeaderType::Var(2), 99);
+            let header_type = super::HeaderType::Var(2, super::HeaderFormat::BCD);
+            tester_for_ascii(&field_val, header_type, 99);
         }
 
-        pub fn tester_for_ascii(
-            iso_fragment: &str,
-            header_type: super::HeaderType,
-            max_length: usize,
-        ) {
+        fn tester_for_ascii(iso_fragment: &str, header_type: super::HeaderType, max_length: usize) {
             let max_length = max_length;
 
             let field_header = match header_type {
                 super::HeaderType::Fixed => String::from(""),
-                super::HeaderType::Var(header_size) => {
-                    let header_size = super::make_even(header_size);
+                super::HeaderType::Var(header_size, _header_format) => {
+                    let header_size = super::Utils::make_even(header_size);
                     let field_header = format!(
                         "{:0>width$}",
                         iso_fragment.len().to_string(),
@@ -555,7 +537,7 @@ mod iso8583_parser {
                 }
             };
 
-            let field_header_bytes = super::decode_hex(&field_header).unwrap();
+            let field_header_bytes = super::Utils::decode_hex(&field_header).unwrap();
 
             let original: String = iso_fragment.chars().take(max_length).collect();
 
@@ -563,16 +545,8 @@ mod iso8583_parser {
 
             let field_bytes: Vec<u8> = [field_header_bytes, iso_fragment_bytes.to_vec()].concat();
 
-            let (result_field_val, _) = super::parse_field(
-                &field_bytes,
-                header_type,
-                max_length,
-                super::FieldTypeDetail {
-                    data_class: super::FieldDataClass::StringFieldType,
-                    field_type: super::FieldType::ANS,
-                    total_unit_per_byte: 1,
-                },
-            );
+            let (result_field_val, _) =
+                super::parse_field(&field_bytes, header_type, max_length, super::FieldType::ANS);
 
             match result_field_val {
                 super::DataElementValue::StringVal(parsed) => {
@@ -591,21 +565,20 @@ mod iso8583_parser {
         #[test]
         fn test_bytes_variable_length() {
             let field_val = String::from("10101010");
-            tester_for_bytes(&field_val, super::HeaderType::Var(2), 32);
+            let header_type = super::HeaderType::Var(2, super::HeaderFormat::BCD);
+
+            tester_for_bytes(&field_val, header_type, 32);
         }
 
-        pub fn tester_for_bytes(
-            iso_fragment: &str,
-            header_type: super::HeaderType,
-            max_length: usize,
-        ) {
+        fn tester_for_bytes(iso_fragment: &str, header_type: super::HeaderType, max_length: usize) {
             let max_length = max_length;
+            let field_type = super::FieldType::B;
 
             let field_header = match header_type {
                 super::HeaderType::Fixed => String::from(""),
-                super::HeaderType::Var(header_size) => {
-                    let header_size = super::make_even(header_size);
-                    let data_len = iso_fragment.len() / 2 * 8; // times 8 because the len should be the bit counts
+                super::HeaderType::Var(header_size, _header_format) => {
+                    let header_size = super::Utils::make_even(header_size);
+                    let data_len = iso_fragment.len() / 2 * field_type.get_total_unit_per_byte(); // times 8 because the len should be the bit counts
 
                     let field_header =
                         format!("{:0>width$}", data_len.to_string(), width = header_size);
@@ -613,27 +586,19 @@ mod iso8583_parser {
                 }
             };
 
-            let field_header_bytes = super::decode_hex(&field_header).unwrap();
+            let field_header_bytes = super::Utils::decode_hex(&field_header).unwrap();
 
             let mut padded_iso_fragment = String::from(iso_fragment);
             if padded_iso_fragment.len() % 2 != 0 {
                 padded_iso_fragment.push_str(&"0");
             };
 
-            let iso_fragment_bytes = super::decode_hex(&padded_iso_fragment).unwrap();
+            let iso_fragment_bytes = super::Utils::decode_hex(&padded_iso_fragment).unwrap();
 
             let field_bytes: Vec<u8> = [field_header_bytes, iso_fragment_bytes.to_vec()].concat();
 
-            let (result_field_val, _) = super::parse_field(
-                &field_bytes,
-                header_type,
-                max_length,
-                super::FieldTypeDetail {
-                    data_class: super::FieldDataClass::BytesFieldType,
-                    field_type: super::FieldType::B,
-                    total_unit_per_byte: 8,
-                },
-            );
+            let (result_field_val, _) =
+                super::parse_field(&field_bytes, header_type, max_length, field_type);
 
             match result_field_val {
                 super::DataElementValue::ByteVal(parsed) => {
@@ -643,19 +608,47 @@ mod iso8583_parser {
             }
         }
     }
+}
 
-    pub fn split_bitmap_and_data(iso_msg: &[u8]) -> (&[u8], &[u8]) {
-        match encode_bin(&iso_msg[0..1]).starts_with("1") {
-            true => (&iso_msg[0..16], &iso_msg[16..]),
-            false => (&iso_msg[0..8], &iso_msg[8..]),
+pub struct Sale {
+    mti: String,
+    proc_code: String,
+    amount: String,
+    hash: String,
+}
+
+pub struct Void {
+    mti: String,
+    proc_code: String,
+    amount: String,
+}
+
+pub enum TxnType {
+    SaleTxn(Sale),
+    VoidTxn(Void),
+}
+
+pub fn map_txn_type(txn: iso8583_parser::Txn) -> TxnType {
+    match txn {
+        iso8583_parser::Txn { mti: ref sale, .. } if sale == "0200" => {
+            let sale_txn = Sale {
+                mti: String::from("0200"),
+                proc_code: String::from("000000"),
+                amount: String::from("10.0"),
+                hash: String::from("1234"),
+            };
+
+            TxnType::SaleTxn(sale_txn)
         }
-    }
+        iso8583_parser::Txn { .. } => {
+            let void_txn = Void {
+                mti: String::from("0200"),
+                proc_code: String::from("000000"),
+                amount: String::from("10.0"),
+            };
 
-    // split MTI, BitMap, Data
-    pub fn split_main_components(bytes: &[u8]) -> (&[u8], &[u8], &[u8]) {
-        let mti = &bytes[0..2];
-        let (bitmap, data) = split_bitmap_and_data(&bytes[2..]);
-        (mti, bitmap, data)
+            TxnType::VoidTxn(void_txn)
+        }
     }
 }
 
@@ -799,7 +792,7 @@ fn main() {
         iso_msg.push_str(&"0");
     }
 
-    let iso_msg = iso8583_parser::decode_hex(&iso_msg).unwrap(); // pad right with zero first if not enough for a byte
+    let iso_msg = iso8583_parser::Utils::decode_hex(&iso_msg).unwrap(); // pad right with zero first if not enough for a byte
 
     let parser = iso8583_parser::Parser::new(&iso_data_elements_spec);
 
